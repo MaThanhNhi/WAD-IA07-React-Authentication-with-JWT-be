@@ -10,8 +10,9 @@ import bcrypt from 'bcrypt';
 import { LoginDto } from './dto/login.dto';
 import {
   hashToken,
-  generateTokenPair,
   calculateExpirationDate,
+  generateAccessToken,
+  generateRefreshToken,
   type TokenMetadata,
 } from './utils/tokens';
 
@@ -56,18 +57,25 @@ export class AuthService {
       throw new UnauthorizedException('Invalid credentials');
     }
 
-    const tokens = generateTokenPair(
+    const accessToken = generateAccessToken(
       this.jwtService,
       this.configService,
       user.id,
       user.role,
     );
 
-    await this.storeRefreshToken(user.id, tokens.refreshToken, metadata);
+    const newRefreshToken = generateRefreshToken(
+      this.jwtService,
+      this.configService,
+      user.id,
+      user.role,
+    );
+
+    await this.storeRefreshToken(user.id, newRefreshToken, metadata);
 
     return {
-      accessToken: tokens.accessToken,
-      refreshToken: tokens.refreshToken,
+      accessToken,
+      refreshToken: newRefreshToken,
       user: {
         id: user.id,
         email: user.email,
@@ -118,22 +126,16 @@ export class AuthService {
         data: { lastUsedAt: new Date() },
       });
 
-      const { accessToken, refreshToken: newRefreshToken } = generateTokenPair(
+      const accessToken = generateAccessToken(
         this.jwtService,
         this.configService,
         storedToken.user.id,
         storedToken.user.role,
       );
 
-      // Delete old refresh token and store new one
-      await this.prisma.refreshToken.delete({
-        where: { id: storedToken.id },
-      });
-      await this.storeRefreshToken(decoded.sub, newRefreshToken, metadata);
-
       return {
         accessToken,
-        refreshToken: newRefreshToken,
+        refreshToken,
         user: {
           id: storedToken.user.id,
           email: storedToken.user.email,

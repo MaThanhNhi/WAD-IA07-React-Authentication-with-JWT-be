@@ -75,36 +75,18 @@ export function parseExpirationToMs(expirationString: string): number {
   }
 }
 
-/**
- * Generate JWT access and refresh tokens
- * @param jwtService - NestJS JWT service
- * @param configService - NestJS Config service
- * @param userId - User ID to encode in token
- * @param role - User role to encode in access token
- * @returns Object containing accessToken and refreshToken
- */
-export function generateTokenPair(
+export function generateAccessToken(
   jwtService: JwtService,
   configService: ConfigService,
   userId: string,
   role: string,
-): { accessToken: string; refreshToken: string } {
+): string {
   const accessPayload = { sub: userId, role };
-  const refreshPayload = { sub: userId };
-
   const accessSecret = configService.get<string>('JWT_ACCESS_SECRET');
-  const refreshSecret = configService.get<string>('JWT_REFRESH_SECRET');
-  const accessExpiration = configService.get<string>(
-    'JWT_ACCESS_EXPIRATION',
-    '15m',
-  );
-  const refreshExpiration = configService.get<string>(
-    'JWT_REFRESH_EXPIRATION',
-    '7d',
-  );
+  const accessExpiration = configService.get<string>('JWT_ACCESS_EXPIRATION', '15m');
 
-  if (!accessSecret || !refreshSecret) {
-    throw new Error('JWT secrets not configured in environment variables');
+  if (!accessSecret) {
+    throw new Error('JWT access secret not configured in environment variables');
   }
 
   const accessToken = jwtService.sign(accessPayload, {
@@ -112,12 +94,29 @@ export function generateTokenPair(
     expiresIn: accessExpiration as any,
   });
 
+  return  accessToken ;
+}
+
+export function generateRefreshToken(
+  jwtService: JwtService,
+  configService: ConfigService,
+  userId: string,
+  role: string,
+) : string {
+  const refreshPayload = { sub: userId };
+  const refreshSecret = configService.get<string>('JWT_REFRESH_SECRET');
+  const refreshExpiration = configService.get<string>('JWT_REFRESH_EXPIRATION', '7d');
+
+  if (!refreshSecret) {
+    throw new Error('JWT refresh secret not configured in environment variables');
+  }
+
   const refreshToken = jwtService.sign(refreshPayload, {
     secret: refreshSecret,
     expiresIn: refreshExpiration as any,
   });
 
-  return { accessToken, refreshToken };
+  return refreshToken;
 }
 
 export interface TokenMetadata {
