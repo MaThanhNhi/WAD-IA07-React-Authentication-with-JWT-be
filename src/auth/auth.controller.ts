@@ -5,10 +5,10 @@ import {
   HttpCode,
   HttpStatus,
   Get,
-  Delete,
   UseGuards,
   Req,
   Res,
+  Delete,
   Param,
 } from '@nestjs/common';
 import type { Request, Response } from 'express';
@@ -18,8 +18,9 @@ import { JwtAuthGuard } from './guards/jwt-auth.guard';
 import { RolesGuard } from './guards/roles.guard';
 import { Roles } from './decorators/roles.decorator';
 import { CurrentUser } from './decorators/current-user.decorator';
+import { setRefreshCookie, parseExpirationToMs } from './utils/tokens';
+import { ConfigService } from '@nestjs/config';
 
-// Role values for RBAC
 const Role = {
   USER: 'USER',
   ADMIN: 'ADMIN',
@@ -28,7 +29,10 @@ const Role = {
 
 @Controller('auth')
 export class AuthController {
-  constructor(private readonly authService: AuthService) {}
+  constructor(
+    private readonly authService: AuthService,
+    private readonly configService: ConfigService,
+  ) {}
 
   private extractMetadata(req: Request) {
     return {
@@ -48,16 +52,13 @@ export class AuthController {
     const metadata = this.extractMetadata(req);
     const result = await this.authService.login(loginDto, metadata);
 
-    // Set refresh token in HTTP-only cookie
-    res.cookie('refreshToken', result.refreshToken, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === 'production', // HTTPS only in production
-      sameSite: 'strict',
-      maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
-      path: '/',
-    });
+    const refreshExpStr = this.configService.get<string>(
+      'JWT_REFRESH_EXPIRATION',
+      '7d',
+    );
+    const refreshExpMs = parseExpirationToMs(refreshExpStr);
+    setRefreshCookie(res, result.refreshToken, refreshExpMs);
 
-    // Return access token and user info (not the refresh token)
     return {
       accessToken: result.accessToken,
       user: result.user,
@@ -69,10 +70,8 @@ export class AuthController {
   async refresh(
     @Req() req: Request,
     @Res({ passthrough: true }) res: Response,
-    @Body('refreshToken') bodyRefreshToken?: string,
   ) {
-    // Try to get refresh token from cookie first, then from body
-    const refreshToken = req.cookies?.refreshToken || bodyRefreshToken;
+    const refreshToken = req.cookies?.refreshToken as string;
     const metadata = this.extractMetadata(req);
 
     const result = await this.authService.refreshAccessToken(
@@ -80,14 +79,12 @@ export class AuthController {
       metadata,
     );
 
-    // Update the refresh token cookie
-    res.cookie('refreshToken', result.refreshToken, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: 'strict',
-      maxAge: 7 * 24 * 60 * 60 * 1000,
-      path: '/',
-    });
+    const refreshExpStr = this.configService.get<string>(
+      'JWT_REFRESH_EXPIRATION',
+      '7d',
+    );
+    const refreshExpMs = parseExpirationToMs(refreshExpStr);
+    setRefreshCookie(res, result.refreshToken, refreshExpMs);
 
     return {
       accessToken: result.accessToken,
@@ -97,15 +94,10 @@ export class AuthController {
 
   @Post('logout')
   @HttpCode(HttpStatus.OK)
-  async logout(
-    @Req() req: Request,
-    @Res({ passthrough: true }) res: Response,
-    @Body('refreshToken') bodyRefreshToken?: string,
-  ) {
-    const refreshToken = req.cookies?.refreshToken || bodyRefreshToken;
+  async logout(@Req() req: Request, @Res({ passthrough: true }) res: Response) {
+    const refreshToken = req.cookies?.refreshToken as string;
     const result = await this.authService.logout(refreshToken);
 
-    // Clear the refresh token cookie
     res.clearCookie('refreshToken', { path: '/' });
 
     return result;
@@ -115,12 +107,11 @@ export class AuthController {
   @UseGuards(JwtAuthGuard)
   @HttpCode(HttpStatus.OK)
   async logoutAllDevices(
-    @CurrentUser() user: any,
+    @CurrentUser() user: { id: string; email: string; role: string },
     @Res({ passthrough: true }) res: Response,
   ) {
     const result = await this.authService.logoutAllDevices(user.id);
 
-    // Clear the refresh token cookie
     res.clearCookie('refreshToken', { path: '/' });
 
     return result;
@@ -128,7 +119,9 @@ export class AuthController {
 
   @Get('sessions')
   @UseGuards(JwtAuthGuard)
-  async getSessions(@CurrentUser() user: any) {
+  async getSessions(
+    @CurrentUser() user: { id: string; email: string; role: string },
+  ) {
     return this.authService.getUserSessions(user.id);
   }
 
@@ -140,7 +133,7 @@ export class AuthController {
 
   @Get('me')
   @UseGuards(JwtAuthGuard)
-  async getProfile(@CurrentUser() user: any) {
+  getProfile(@CurrentUser() user: { id: string; email: string; role: string }) {
     return user;
   }
 
@@ -148,7 +141,7 @@ export class AuthController {
   @Get('admin/users')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(Role.ADMIN)
-  async getUsers(@CurrentUser() user: any) {
+  getUsers(@CurrentUser() user: { id: string; email: string; role: string }) {
     return {
       message: 'Admin access granted',
       adminUser: user,
@@ -159,7 +152,9 @@ export class AuthController {
   @Get('moderation/stats')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(Role.ADMIN, Role.MODERATOR)
-  async getModerationStats(@CurrentUser() user: any) {
+  getModerationStats(
+    @CurrentUser() user: { id: string; email: string; role: string },
+  ) {
     return {
       message: 'Moderator/Admin access granted',
       user,

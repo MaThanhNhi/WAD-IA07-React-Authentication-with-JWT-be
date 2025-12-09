@@ -4,25 +4,38 @@ import {
   BadRequestException,
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
+import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../prisma/prisma.service';
 import bcrypt from 'bcrypt';
 import { LoginDto } from './dto/login.dto';
-import { createHash } from 'crypto';
-
-interface TokenMetadata {
-  userAgent?: string;
-  ipAddress?: string;
-  fingerprint?: string;
-}
+import {
+  hashToken,
+  generateTokenPair,
+  calculateExpirationDate,
+  type TokenMetadata,
+} from './utils/tokens';
 
 @Injectable()
 export class AuthService {
+  private readonly jwtRefreshSecret: string;
+  private readonly jwtRefreshExpiration: string;
+
   constructor(
     private prisma: PrismaService,
     private jwtService: JwtService,
-  ) {}
+    private configService: ConfigService,
+  ) {
+    this.jwtRefreshSecret =
+      this.configService.get<string>('JWT_REFRESH_SECRET')!;
+    this.jwtRefreshExpiration = this.configService.get<string>(
+      'JWT_REFRESH_EXPIRATION',
+      '7d',
+    )!;
+  }
+
   async login(loginDto: LoginDto, metadata?: TokenMetadata) {
-    const { email, password } = loginDto;    // Find user by email
+    const { email, password } = loginDto;
+
     const user = await this.prisma.user.findUnique({
       where: { email },
       select: {
@@ -38,14 +51,18 @@ export class AuthService {
       throw new UnauthorizedException('Invalid credentials');
     }
 
-    // Verify password
     const isPasswordValid = await bcrypt.compare(password, user.password);
     if (!isPasswordValid) {
       throw new UnauthorizedException('Invalid credentials');
-    }    // Generate tokens
-    const tokens = await this.generateTokens(user.id, user.role);
+    }
 
-    // Store refresh token with metadata in database
+    const tokens = generateTokenPair(
+      this.jwtService,
+      this.configService,
+      user.id,
+      user.role,
+    );
+
     await this.storeRefreshToken(user.id, tokens.refreshToken, metadata);
 
     return {
@@ -59,21 +76,19 @@ export class AuthService {
       },
     };
   }
+
   async refreshAccessToken(refreshToken: string, metadata?: TokenMetadata) {
     if (!refreshToken) {
       throw new BadRequestException('Refresh token is required');
     }
 
     try {
-      // Verify refresh token
       const decoded = this.jwtService.verify(refreshToken, {
-        secret: process.env.JWT_REFRESH_SECRET,
+        secret: this.jwtRefreshSecret,
       });
 
-      // Hash the refresh token to find it in database
-      const hashedToken = this.hashToken(refreshToken);
+      const hashedToken = hashToken(refreshToken);
 
-      // Check if refresh token exists in database and is not expired
       const storedToken = await this.prisma.refreshToken.findUnique({
         where: { hashedToken },
         include: { user: true },
@@ -83,7 +98,6 @@ export class AuthService {
         throw new UnauthorizedException('Invalid refresh token');
       }
 
-      // Check if token is revoked
       if (storedToken.isRevoked) {
         // If a revoked token is used, revoke all user's tokens as a security measure
         await this.logoutAllDevices(storedToken.userId);
@@ -104,20 +118,11 @@ export class AuthService {
         data: { lastUsedAt: new Date() },
       });
 
-      // Generate new access token with role
-      const payload = { sub: decoded.sub, role: storedToken.user.role };
-      const accessToken = this.jwtService.sign(payload, {
-        secret: process.env.JWT_ACCESS_SECRET as string,
-        expiresIn: (process.env.JWT_ACCESS_EXPIRATION || '15m') as any,
-      });
-
-      // Optional: Rotate refresh token (security best practice)
-      const newRefreshToken = this.jwtService.sign(
-        { sub: decoded.sub },
-        {
-          secret: process.env.JWT_REFRESH_SECRET as string,
-          expiresIn: (process.env.JWT_REFRESH_EXPIRATION || '7d') as any,
-        },
+      const { accessToken, refreshToken: newRefreshToken } = generateTokenPair(
+        this.jwtService,
+        this.configService,
+        storedToken.user.id,
+        storedToken.user.role,
       );
 
       // Delete old refresh token and store new one
@@ -135,24 +140,23 @@ export class AuthService {
           role: storedToken.user.role,
         },
       };
-    } catch (error) {
+    } catch {
       throw new UnauthorizedException('Invalid or expired refresh token');
     }
   }
-  async logout(refreshToken: string) {
+
+  async logout(refreshToken?: string) {
     if (!refreshToken) {
       return { message: 'Logged out successfully' };
     }
 
     try {
-      // Hash the token before lookup
-      const hashedToken = this.hashToken(refreshToken);
+      const hashedToken = hashToken(refreshToken);
 
-      // Delete refresh token from database
       await this.prisma.refreshToken.delete({
         where: { hashedToken },
       });
-    } catch (error) {
+    } catch {
       // Token doesn't exist, that's fine
     }
 
@@ -160,7 +164,6 @@ export class AuthService {
   }
 
   async logoutAllDevices(userId: string) {
-    // Delete all refresh tokens for this user
     await this.prisma.refreshToken.deleteMany({
       where: { userId },
     });
@@ -198,19 +201,6 @@ export class AuthService {
     return sessions;
   }
 
-  async cleanupExpiredTokens() {
-    const result = await this.prisma.refreshToken.deleteMany({
-      where: {
-        OR: [
-          { expiresAt: { lt: new Date() } },
-          { isRevoked: true },
-        ],
-      },
-    });
-
-    return { deletedCount: result.count };
-  }
-
   async validateUser(userId: string) {
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
@@ -226,21 +216,6 @@ export class AuthService {
     }
 
     return user;
-  }  
-    private async generateTokens(userId: string, role: string) {
-    const payload = { sub: userId, role };
-    
-    const accessToken = this.jwtService.sign(payload, {
-      secret: process.env.JWT_ACCESS_SECRET as string,
-      expiresIn: (process.env.JWT_ACCESS_EXPIRATION || '15m') as any,
-    });
-
-    const refreshToken = this.jwtService.sign({ sub: userId }, {
-      secret: process.env.JWT_REFRESH_SECRET as string,
-      expiresIn: (process.env.JWT_REFRESH_EXPIRATION || '7d') as any,
-    });
-
-    return { accessToken, refreshToken };
   }
 
   private async storeRefreshToken(
@@ -248,13 +223,8 @@ export class AuthService {
     token: string,
     metadata?: TokenMetadata,
   ) {
-    // Hash the token before storing
-    const hashedToken = this.hashToken(token);
-
-    // Calculate expiration date (7 days from now by default)
-    const expirationDays = 7;
-    const expiresAt = new Date();
-    expiresAt.setDate(expiresAt.getDate() + expirationDays);
+    const hashedToken = hashToken(token);
+    const expiresAt = calculateExpirationDate(this.jwtRefreshExpiration);
 
     await this.prisma.refreshToken.create({
       data: {
@@ -266,9 +236,5 @@ export class AuthService {
         fingerprint: metadata?.fingerprint,
       },
     });
-  }
-
-  private hashToken(token: string): string {
-    return createHash('sha256').update(token).digest('hex');
   }
 }

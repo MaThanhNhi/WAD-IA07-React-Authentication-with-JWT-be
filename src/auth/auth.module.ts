@@ -6,12 +6,16 @@ import { AuthController } from './auth.controller';
 import { JwtStrategy } from './strategies/jwt.strategy';
 import { PrismaModule } from '../prisma/prisma.module';
 
-@Module({  imports: [
+@Module({
+  imports: [
     PrismaModule,
     PassportModule,
     JwtModule.register({
       secret: process.env.JWT_ACCESS_SECRET,
-      signOptions: { expiresIn: (process.env.JWT_ACCESS_EXPIRATION || '15m') as any },
+      signOptions: {
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
+        expiresIn: (process.env.JWT_ACCESS_EXPIRATION || '15m') as any,
+      },
     }),
   ],
   controllers: [AuthController],

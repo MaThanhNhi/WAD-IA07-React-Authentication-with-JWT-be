@@ -17,7 +17,7 @@ export class PrismaService implements OnModuleInit, OnModuleDestroy {
     // Create Prisma adapter
     const adapter = new PrismaPg(this.pool);
 
-    // Initialize Prisma Client with adapter
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
     this.prisma = new PrismaClient({
       adapter,
     } as any); // Type assertion needed due to Prisma 7 type limitations
