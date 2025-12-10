@@ -1,63 +1,89 @@
-import {
-  Injectable,
-  BadRequestException,
-  ConflictException,
-} from '@nestjs/common';
-import bcrypt from 'bcrypt';
-import { CreateUserDto } from './dto/create-user.dto';
+import { Injectable, UnauthorizedException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { UserResponseDto } from './dto/user-response.dto';
 
 @Injectable()
 export class UserService {
   constructor(private prisma: PrismaService) {}
 
-  async register(createUserDto: CreateUserDto) {
-    const { email, password } = createUserDto;
-
-    if (!email || !password) {
-      throw new BadRequestException('Email and password are required');
-    }
-
-    const emailRegex = /^([a-zA-Z0-9._%-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,6})*$/;
-    if (!emailRegex.test(email)) {
-      throw new BadRequestException('Invalid email format');
-    }
-
-    const passwordRegex =
-      /(?=(.*[0-9]))(?=.*[!@#$%^&*()\\[\]{}\-_+=~`|:;"'<>,./?])(?=.*[a-z])(?=(.*[A-Z]))(?=(.*)).{8,}/;
-    if (!passwordRegex.test(password)) {
-      throw new BadRequestException(
-        'Password must be at least 8 characters long and contain a mix of uppercase, lowercase, numeric characters, and special characters',
-      );
-    }
-
-    // Check if email already exists
-    const existingUser = await this.prisma.user.findUnique({
-      where: { email },
-    });
-
-    if (existingUser) {
-      throw new ConflictException('Email already in use');
-    }
-
-    // Hash password
-    const hashedPassword = await bcrypt.hash(password, 10);
-
-    const user = await this.prisma.user.create({
-      data: {
-        email,
-        password: hashedPassword,
-      },
+  async getProfile(userId: string): Promise<UserResponseDto> {
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
       select: {
         id: true,
         email: true,
+        role: true,
         createdAt: true,
       },
     });
 
+    if (!user) {
+      throw new UnauthorizedException('User not found');
+    }
+
+    return user;
+  }
+
+  async getAllUsers(adminUserId: string) {
+    // Verify admin is making the request (already verified by guard, but good practice)
+    const admin = await this.prisma.user.findUnique({
+      where: { id: adminUserId },
+      select: { role: true },
+    });
+
+    if (!admin || admin.role !== 'ADMIN') {
+      throw new UnauthorizedException('Admin access required');
+    }
+
+    const users = await this.prisma.user.findMany({
+      select: {
+        id: true,
+        email: true,
+        role: true,
+        createdAt: true,
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+
     return {
-      message: 'User registered successfully',
+      message: 'Admin access granted',
+      users,
+      adminUser: { id: adminUserId },
+    };
+  }
+
+  async getModerationStats(userId: string) {
+    // Get user info
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: {
+        id: true,
+        email: true,
+        role: true,
+        createdAt: true,
+      },
+    });
+
+    if (!user) {
+      throw new UnauthorizedException('User not found');
+    }
+
+    // Get basic stats
+    const totalUsers = await this.prisma.user.count();
+    const totalSessions = await this.prisma.refreshToken.count({
+      where: {
+        isRevoked: false,
+        expiresAt: { gt: new Date() },
+      },
+    });
+
+    return {
+      message: 'Moderator/Admin access granted',
       user,
+      stats: {
+        totalUsers,
+        activeSessions: totalSessions,
+      },
     };
   }
 }

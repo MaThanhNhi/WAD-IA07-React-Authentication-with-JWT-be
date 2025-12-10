@@ -83,10 +83,15 @@ export function generateAccessToken(
 ): string {
   const accessPayload = { sub: userId, role };
   const accessSecret = configService.get<string>('JWT_ACCESS_SECRET');
-  const accessExpiration = configService.get<string>('JWT_ACCESS_EXPIRATION', '15m');
+  const accessExpiration = configService.get<string>(
+    'JWT_ACCESS_EXPIRATION',
+    '15m',
+  );
 
   if (!accessSecret) {
-    throw new Error('JWT access secret not configured in environment variables');
+    throw new Error(
+      'JWT access secret not configured in environment variables',
+    );
   }
 
   const accessToken = jwtService.sign(accessPayload, {
@@ -94,21 +99,25 @@ export function generateAccessToken(
     expiresIn: accessExpiration as any,
   });
 
-  return  accessToken ;
+  return accessToken;
 }
 
 export function generateRefreshToken(
   jwtService: JwtService,
   configService: ConfigService,
   userId: string,
-  role: string,
-) : string {
+): string {
   const refreshPayload = { sub: userId };
   const refreshSecret = configService.get<string>('JWT_REFRESH_SECRET');
-  const refreshExpiration = configService.get<string>('JWT_REFRESH_EXPIRATION', '7d');
+  const refreshExpiration = configService.get<string>(
+    'JWT_REFRESH_EXPIRATION',
+    '7d',
+  );
 
   if (!refreshSecret) {
-    throw new Error('JWT refresh secret not configured in environment variables');
+    throw new Error(
+      'JWT refresh secret not configured in environment variables',
+    );
   }
 
   const refreshToken = jwtService.sign(refreshPayload, {

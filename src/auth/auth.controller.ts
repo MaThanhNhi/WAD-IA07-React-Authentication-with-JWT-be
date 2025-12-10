@@ -15,17 +15,9 @@ import type { Request, Response } from 'express';
 import { AuthService } from './auth.service';
 import { LoginDto } from './dto/login.dto';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
-import { RolesGuard } from './guards/roles.guard';
-import { Roles } from './decorators/roles.decorator';
 import { CurrentUser } from './decorators/current-user.decorator';
 import { setRefreshCookie, parseExpirationToMs } from './utils/tokens';
 import { ConfigService } from '@nestjs/config';
-
-const Role = {
-  USER: 'USER',
-  ADMIN: 'ADMIN',
-  MODERATOR: 'MODERATOR',
-} as const;
 
 @Controller('auth')
 export class AuthController {
@@ -40,6 +32,12 @@ export class AuthController {
       ipAddress: req.ip || req.socket.remoteAddress,
       fingerprint: req.headers['x-fingerprint'] as string | undefined,
     };
+  }
+
+  @Post('register')
+  @HttpCode(HttpStatus.CREATED)
+  async register(@Body() body: { email: string; password: string }) {
+    return this.authService.register(body.email, body.password);
   }
 
   @Post('login')
@@ -72,12 +70,8 @@ export class AuthController {
     @Res({ passthrough: true }) res: Response,
   ) {
     const refreshToken = req.cookies?.refreshToken as string;
-    const metadata = this.extractMetadata(req);
 
-    const result = await this.authService.refreshAccessToken(
-      refreshToken,
-      metadata,
-    );
+    const result = await this.authService.refreshAccessToken(refreshToken);
 
     const refreshExpStr = this.configService.get<string>(
       'JWT_REFRESH_EXPIRATION',
@@ -129,35 +123,5 @@ export class AuthController {
   @UseGuards(JwtAuthGuard)
   async revokeSession(@Param('id') sessionId: string) {
     return this.authService.revokeToken(sessionId);
-  }
-
-  @Get('me')
-  @UseGuards(JwtAuthGuard)
-  getProfile(@CurrentUser() user: { id: string; email: string; role: string }) {
-    return user;
-  }
-
-  // Example: Admin-only endpoint
-  @Get('admin/users')
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(Role.ADMIN)
-  getUsers(@CurrentUser() user: { id: string; email: string; role: string }) {
-    return {
-      message: 'Admin access granted',
-      adminUser: user,
-    };
-  }
-
-  // Example: Admin or Moderator endpoint
-  @Get('moderation/stats')
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(Role.ADMIN, Role.MODERATOR)
-  getModerationStats(
-    @CurrentUser() user: { id: string; email: string; role: string },
-  ) {
-    return {
-      message: 'Moderator/Admin access granted',
-      user,
-    };
   }
 }

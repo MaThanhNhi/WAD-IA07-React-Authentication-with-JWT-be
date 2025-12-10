@@ -2,6 +2,7 @@ import {
   Injectable,
   UnauthorizedException,
   BadRequestException,
+  ConflictException,
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
@@ -32,6 +33,55 @@ export class AuthService {
       'JWT_REFRESH_EXPIRATION',
       '7d',
     )!;
+  }
+
+  async register(email: string, password: string) {
+    if (!email || !password) {
+      throw new BadRequestException('Email and password are required');
+    }
+
+    const emailRegex = /^([a-zA-Z0-9._%-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,6})*$/;
+    if (!emailRegex.test(email)) {
+      throw new BadRequestException('Invalid email format');
+    }
+
+    const passwordRegex =
+      /(?=(.*[0-9]))(?=.*[!@#$%^&*()\\[\]{}\-_+=~`|:;"'<>,./?])(?=.*[a-z])(?=(.*[A-Z]))(?=(.*)).{8,}/;
+    if (!passwordRegex.test(password)) {
+      throw new BadRequestException(
+        'Password must be at least 8 characters long and contain a mix of uppercase, lowercase, numeric characters, and special characters',
+      );
+    }
+
+    // Check if email already exists
+    const existingUser = await this.prisma.user.findUnique({
+      where: { email },
+    });
+
+    if (existingUser) {
+      throw new ConflictException('Email already in use');
+    }
+
+    // Hash password
+    const hashedPassword = await bcrypt.hash(password, 10);
+
+    const user = await this.prisma.user.create({
+      data: {
+        email,
+        password: hashedPassword,
+      },
+      select: {
+        id: true,
+        email: true,
+        role: true,
+        createdAt: true,
+      },
+    });
+
+    return {
+      message: 'User registered successfully',
+      user,
+    };
   }
 
   async login(loginDto: LoginDto, metadata?: TokenMetadata) {
@@ -68,7 +118,6 @@ export class AuthService {
       this.jwtService,
       this.configService,
       user.id,
-      user.role,
     );
 
     await this.storeRefreshToken(user.id, newRefreshToken, metadata);
@@ -85,13 +134,13 @@ export class AuthService {
     };
   }
 
-  async refreshAccessToken(refreshToken: string, metadata?: TokenMetadata) {
+  async refreshAccessToken(refreshToken: string) {
     if (!refreshToken) {
       throw new BadRequestException('Refresh token is required');
     }
 
     try {
-      const decoded = this.jwtService.verify(refreshToken, {
+      this.jwtService.verify(refreshToken, {
         secret: this.jwtRefreshSecret,
       });
 
@@ -140,6 +189,7 @@ export class AuthService {
           id: storedToken.user.id,
           email: storedToken.user.email,
           role: storedToken.user.role,
+          createdAt: storedToken.user.createdAt,
         },
       };
     } catch {
